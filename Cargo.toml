@@ -1,0 +1,19 @@
+[workspace]
+members = [
+    "crates/fluxion-cli",
+    "crates/fluxion-core",
+    "crates/fluxion-host",
+    "components/hello",
+]
+resolver = "2"
+
+[workspace.dependencies]
+anyhow     = "1"
+serde      = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+tokio      = { version = "1", features = ["full"] }
+tracing    = "0.1"
+rusqlite   = { version = "0.31", features = ["bundled"] }
+clap       = { version = "4", features = ["derive"] }
+wasmtime   = { version = "28", features = ["component-model"] }
+wasmtime-wasi = "28"
