@@ -1,3 +1,5 @@
+pub mod scheduler;
+
 use anyhow::Result;
 use std::path::Path;
 use wasmtime::component::{Component, Linker};

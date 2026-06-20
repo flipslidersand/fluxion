@@ -3,8 +3,8 @@ members = [
     "crates/fluxion-cli",
     "crates/fluxion-core",
     "crates/fluxion-host",
-    "components/hello",
 ]
+# components/* are Wasm-only — build with `cargo component build` per-directory
 resolver = "2"
 
 [workspace.dependencies]
