@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Workflow {
@@ -16,7 +16,61 @@ pub struct JobDefinition {
     pub depends_on: Vec<String>,
     #[serde(default)]
     pub input: Option<String>,
+    #[serde(default)]
+    pub permissions: PermissionSet,
 }
+
+// ── Permission types ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PermissionSet {
+    #[serde(default)]
+    pub filesystem: FilesystemPermission,
+    #[serde(default)]
+    pub network: NetworkPermission,
+    #[serde(default)]
+    pub limits: ResourceLimits,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FilesystemPermission {
+    /// Directories the component may read from (guest path = host path).
+    #[serde(default)]
+    pub read: Vec<PathBuf>,
+    /// Directories the component may read and write.
+    #[serde(default)]
+    pub write: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NetworkPermission {
+    /// Allowlist of host:port strings. Empty = deny all.
+    #[serde(default)]
+    pub allow: Vec<String>,
+}
+
+impl NetworkPermission {
+    pub fn allows(&self, addr: &str) -> bool {
+        self.allow.iter().any(|h| addr.starts_with(h.as_str()))
+    }
+    pub fn is_deny_all(&self) -> bool {
+        self.allow.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceLimits {
+    pub memory_mb: u64,
+    pub timeout_secs: u64,
+}
+
+impl Default for ResourceLimits {
+    fn default() -> Self {
+        Self { memory_mb: 256, timeout_secs: 60 }
+    }
+}
+
+// ── Workflow impl ─────────────────────────────────────────────────────────────
 
 impl Workflow {
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {

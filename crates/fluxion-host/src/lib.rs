@@ -1,10 +1,11 @@
 pub mod scheduler;
 
 use anyhow::Result;
+use fluxion_core::workflow::PermissionSet;
 use std::path::Path;
 use wasmtime::component::{Component, Linker};
-use wasmtime::{Config, Engine, Store};
-use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiView};
+use wasmtime::{Config, Engine, Store, StoreLimitsBuilder};
+use wasmtime_wasi::{DirPerms, FilePerms, ResourceTable, WasiCtx, WasiCtxBuilder, WasiView};
 
 wasmtime::component::bindgen!({
     path: "../../wit/task.wit",
@@ -14,6 +15,7 @@ wasmtime::component::bindgen!({
 struct HostState {
     ctx: WasiCtx,
     table: ResourceTable,
+    limits: wasmtime::StoreLimits,
 }
 
 impl WasiView for HostState {
@@ -37,17 +39,23 @@ impl FluxionHost {
         Ok(Self { engine })
     }
 
-    pub fn run_component(&self, wasm_path: impl AsRef<Path>, input: Vec<u8>) -> Result<Vec<u8>> {
+    pub fn run_component(
+        &self,
+        wasm_path: impl AsRef<Path>,
+        input: Vec<u8>,
+        perms: &PermissionSet,
+    ) -> Result<Vec<u8>> {
         let mut linker: Linker<HostState> = Linker::new(&self.engine);
         wasmtime_wasi::add_to_linker_sync(&mut linker)?;
 
-        let table = ResourceTable::new();
-        let wasi = WasiCtxBuilder::new()
-            .inherit_stdout()
-            .inherit_stderr()
+        let ctx = build_wasi_ctx(perms)?;
+        let limits = StoreLimitsBuilder::new()
+            .memory_size(perms.limits.memory_mb as usize * 1024 * 1024)
             .build();
-        let state = HostState { ctx: wasi, table };
+
+        let state = HostState { ctx, table: ResourceTable::new(), limits };
         let mut store = Store::new(&self.engine, state);
+        store.limiter(|s| &mut s.limits);
 
         let component = Component::from_file(&self.engine, wasm_path)?;
         let instance = TaskComponent::instantiate(&mut store, &component, &linker)?;
@@ -66,4 +74,32 @@ impl FluxionHost {
             Err(e) => anyhow::bail!("Component error: {}", e),
         }
     }
+}
+
+fn build_wasi_ctx(perms: &PermissionSet) -> Result<WasiCtx> {
+    let mut builder = WasiCtxBuilder::new();
+    builder.inherit_stdout().inherit_stderr();
+
+    // Filesystem: preopen read dirs
+    for path in &perms.filesystem.read {
+        if path.exists() {
+            let guest = path.to_string_lossy().to_string();
+            builder.preopened_dir(path, &guest, DirPerms::READ, FilePerms::READ)?;
+        }
+    }
+
+    // Filesystem: preopen read-write dirs
+    for path in &perms.filesystem.write {
+        if path.exists() {
+            let guest = path.to_string_lossy().to_string();
+            builder.preopened_dir(
+                path,
+                &guest,
+                DirPerms::READ | DirPerms::MUTATE,
+                FilePerms::READ | FilePerms::WRITE,
+            )?;
+        }
+    }
+
+    Ok(builder.build())
 }

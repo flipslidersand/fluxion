@@ -657,6 +657,7 @@ name = "fluxion-host"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cap-std",
  "fluxion-core",
  "tokio",
  "wasmtime",

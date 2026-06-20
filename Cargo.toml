@@ -4,7 +4,7 @@ members = [
     "crates/fluxion-core",
     "crates/fluxion-host",
 ]
-# components/* are Wasm-only — build with `cargo component build` per-directory
+exclude = ["components/hello", "components/file-reader"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -17,3 +17,4 @@ rusqlite   = { version = "0.31", features = ["bundled"] }
 clap       = { version = "4", features = ["derive"] }
 wasmtime   = { version = "28", features = ["component-model"] }
 wasmtime-wasi = "28"
+cap-std       = "3"

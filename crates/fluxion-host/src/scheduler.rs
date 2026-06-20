@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use fluxion_core::{dag::Dag, state::JobStatus, workflow::Workflow};
+use fluxion_core::{dag::Dag, state::JobStatus, workflow::{PermissionSet, Workflow}};
 use tokio::sync::mpsc;
 
 use crate::FluxionHost;
@@ -20,7 +20,6 @@ pub async fn run(wf: &Workflow, host: Arc<FluxionHost>) -> Result<()> {
 
     let (tx, mut rx) = mpsc::unbounded_channel::<JobEvent>();
 
-    // Launch root jobs immediately
     let roots = dag.roots();
     let mut in_flight = roots.len();
     for job_id in roots {
@@ -46,7 +45,6 @@ pub async fn run(wf: &Workflow, host: Arc<FluxionHost>) -> Result<()> {
             return Ok(());
         }
 
-        // Unblock dependents whose all deps are now Succeeded
         for dep in dag.dependents.get(&event.job_id).into_iter().flatten() {
             let all_done = dag.deps[dep]
                 .iter()
@@ -83,24 +81,27 @@ struct JobEvent {
 fn launch(job_id: &str, wf: &Workflow, host: Arc<FluxionHost>, tx: mpsc::UnboundedSender<JobEvent>) {
     let job_id = job_id.to_string();
     let component = wf.jobs[&job_id].component.clone();
-    let input = wf.jobs[&job_id]
-        .input
-        .clone()
-        .unwrap_or_default()
-        .into_bytes();
+    let input = wf.jobs[&job_id].input.clone().unwrap_or_default().into_bytes();
+    let perms = wf.jobs[&job_id].permissions.clone();
+    let timeout_secs = perms.limits.timeout_secs;
 
     tokio::spawn(async move {
         let start = Instant::now();
-        let result = tokio::task::spawn_blocking(move || {
-            host.run_component(&component, input)
-        })
+        let result = tokio::time::timeout(
+            Duration::from_secs(timeout_secs),
+            tokio::task::spawn_blocking(move || host.run_component(&component, input, &perms)),
+        )
         .await;
 
         let elapsed = start.elapsed();
         let status = match result {
-            Ok(Ok(_output)) => JobStatus::Succeeded { elapsed },
+            Err(_) => JobStatus::Failed {
+                elapsed,
+                reason: format!("Timeout after {}s", timeout_secs),
+            },
+            Ok(Ok(Ok(_))) => JobStatus::Succeeded { elapsed },
+            Ok(Ok(Err(e))) => JobStatus::Failed { elapsed, reason: e.to_string() },
             Ok(Err(e)) => JobStatus::Failed { elapsed, reason: e.to_string() },
-            Err(e) => JobStatus::Failed { elapsed, reason: e.to_string() },
         };
         let _ = tx.send(JobEvent { job_id, status });
     });
@@ -131,7 +132,7 @@ fn print_result(event: &JobEvent, pad: usize) {
             elapsed.as_secs_f64(),
             pad = pad
         ),
-        JobStatus::Failed { elapsed, .. } => println!(
+        JobStatus::Failed { elapsed, reason: _ } => println!(
             "[{}] {:<pad$}  FAILED   {:.2}s",
             timestamp(),
             event.job_id,
@@ -141,3 +142,7 @@ fn print_result(event: &JobEvent, pad: usize) {
         _ => {}
     }
 }
+
+// Keep PermissionSet in scope for the import
+#[allow(unused_imports)]
+use PermissionSet as _;

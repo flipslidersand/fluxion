@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use fluxion_core::workflow::Workflow;
+use fluxion_core::workflow::{PermissionSet, Workflow};
 use fluxion_host::{scheduler, FluxionHost};
 use std::sync::Arc;
 
@@ -51,7 +51,7 @@ async fn main() -> Result<()> {
             ComponentCommands::Run { path, input } => {
                 let host = FluxionHost::new()?;
                 let output = host
-                    .run_component(&path, input.into_bytes())
+                    .run_component(&path, input.into_bytes(), &PermissionSet::default())
                     .map_err(|e| anyhow::anyhow!("Failed to run '{}': {}", path, e))?;
                 println!("{}", String::from_utf8_lossy(&output));
             }
