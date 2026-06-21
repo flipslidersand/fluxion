@@ -1,3 +1,5 @@
+mod telemetry;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use fluxion_core::{
@@ -11,6 +13,10 @@ use std::sync::Arc;
 #[derive(Parser)]
 #[command(name = "fluxion", about = "Safe Wasm-based job execution engine")]
 struct Cli {
+    /// Emit OpenTelemetry spans to stdout
+    #[arg(long, global = true)]
+    trace: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -65,8 +71,16 @@ enum RunsCommands {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    let provider = telemetry::init(cli.trace);
 
-    match cli.command {
+    let result = run(cli.command).await;
+
+    telemetry::shutdown(provider);
+    result
+}
+
+async fn run(command: Commands) -> Result<()> {
+    match command {
         Commands::Run { path } => {
             let wf = Workflow::from_file(&path)
                 .map_err(|e| anyhow::anyhow!("Failed to load '{}': {}", path, e))?;

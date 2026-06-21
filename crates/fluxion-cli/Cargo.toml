@@ -8,8 +8,14 @@ name = "fluxion"
 path = "src/main.rs"
 
 [dependencies]
-anyhow        = { workspace = true }
-clap          = { workspace = true }
-tokio         = { workspace = true }
-fluxion-core  = { path = "../fluxion-core" }
-fluxion-host  = { path = "../fluxion-host" }
+anyhow                = { workspace = true }
+clap                  = { workspace = true }
+tokio                 = { workspace = true }
+tracing               = { workspace = true }
+tracing-subscriber    = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+opentelemetry         = { workspace = true }
+opentelemetry_sdk     = { workspace = true }
+opentelemetry-stdout  = { workspace = true }
+fluxion-core          = { path = "../fluxion-core" }
+fluxion-host          = { path = "../fluxion-host" }

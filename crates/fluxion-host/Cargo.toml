@@ -7,6 +7,7 @@ edition = "2024"
 anyhow        = { workspace = true }
 cap-std       = { workspace = true }
 tokio         = { workspace = true }
+tracing       = { workspace = true }
 wasmtime      = { workspace = true }
 wasmtime-wasi = { workspace = true }
 fluxion-core  = { path = "../fluxion-core" }

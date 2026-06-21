@@ -11,6 +11,7 @@ use fluxion_core::{
     workflow::Workflow,
 };
 use tokio::sync::mpsc;
+use tracing::{info_span, Instrument};
 
 use crate::FluxionHost;
 
@@ -21,7 +22,10 @@ pub async fn run(wf: &Workflow, workflow_path: &Path, host: Arc<FluxionHost>) ->
     store.create_run(&run_id, &wf.name, workflow_path)?;
     println!("Run ID: {run_id}");
 
-    let success = execute(wf, host, &store, &run_id, HashMap::new()).await?;
+    let span = info_span!("fluxion.run", run_id = %run_id, workflow = %wf.name);
+    let success = execute(wf, host, &store, &run_id, HashMap::new())
+        .instrument(span)
+        .await?;
     store.complete_run(&run_id, success)?;
     Ok(())
 }
@@ -55,7 +59,10 @@ pub async fn retry(
         pre_succeeded.len()
     );
 
-    let success = execute(wf, host, &store, &run_id, pre_succeeded).await?;
+    let span = info_span!("fluxion.run", run_id = %run_id, workflow = %wf.name, retry = true);
+    let success = execute(wf, host, &store, &run_id, pre_succeeded)
+        .instrument(span)
+        .await?;
     store.complete_run(&run_id, success)?;
     Ok(())
 }
@@ -184,26 +191,38 @@ fn launch(job_id: &str, wf: &Workflow, host: Arc<FluxionHost>, tx: mpsc::Unbound
     let perms = wf.jobs[&job_id].permissions.clone();
     let timeout_secs = perms.limits.timeout_secs;
 
-    tokio::spawn(async move {
-        let start = Instant::now();
-        let result = tokio::time::timeout(
-            Duration::from_secs(timeout_secs),
-            tokio::task::spawn_blocking(move || host.run_component(&component, input, &perms)),
-        )
-        .await;
+    let span = info_span!("fluxion.job", job.id = %job_id, component = %component);
 
-        let elapsed = start.elapsed();
-        let status = match result {
-            Err(_) => JobStatus::Failed {
-                elapsed,
-                reason: format!("Timeout after {}s", timeout_secs),
-            },
-            Ok(Ok(Ok(_))) => JobStatus::Succeeded { elapsed },
-            Ok(Ok(Err(e))) => JobStatus::Failed { elapsed, reason: e.to_string() },
-            Ok(Err(e)) => JobStatus::Failed { elapsed, reason: e.to_string() },
-        };
-        let _ = tx.send(JobEvent { job_id, status });
-    });
+    tokio::spawn(
+        async move {
+            let start = Instant::now();
+            let result = tokio::time::timeout(
+                Duration::from_secs(timeout_secs),
+                tokio::task::spawn_blocking(move || host.run_component(&component, input, &perms)),
+            )
+            .await;
+
+            let elapsed = start.elapsed();
+            let status = match result {
+                Err(_) => JobStatus::Failed {
+                    elapsed,
+                    reason: format!("Timeout after {}s", timeout_secs),
+                },
+                Ok(Ok(Ok(_))) => JobStatus::Succeeded { elapsed },
+                Ok(Ok(Err(e))) => JobStatus::Failed { elapsed, reason: e.to_string() },
+                Ok(Err(e)) => JobStatus::Failed { elapsed, reason: e.to_string() },
+            };
+
+            tracing::info!(
+                status = status.label(),
+                elapsed_ms = elapsed.as_millis() as u64,
+                "job finished"
+            );
+
+            let _ = tx.send(JobEvent { job_id, status });
+        }
+        .instrument(span),
+    );
 }
 
 /// Collect `start` and all jobs reachable downstream from it (inclusive).
