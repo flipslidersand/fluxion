@@ -7,4 +7,5 @@ edition = "2024"
 anyhow     = { workspace = true }
 serde      = { workspace = true }
 serde_yaml = { workspace = true }
+rusqlite   = { workspace = true }
 indexmap   = { version = "2", features = ["serde"] }

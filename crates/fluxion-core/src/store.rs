@@ -1,0 +1,178 @@
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use anyhow::Result;
+use rusqlite::{Connection, params};
+
+use crate::state::JobStatus;
+
+const SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS runs (
+    id            TEXT PRIMARY KEY,
+    workflow_name TEXT NOT NULL,
+    workflow_path TEXT NOT NULL,
+    started_at    INTEGER NOT NULL,
+    completed_at  INTEGER,
+    status        TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS job_states (
+    run_id    TEXT NOT NULL,
+    job_id    TEXT NOT NULL,
+    status    TEXT NOT NULL,
+    elapsed_ms INTEGER,
+    reason    TEXT,
+    PRIMARY KEY (run_id, job_id)
+);
+";
+
+pub struct RunStore {
+    conn: Connection,
+}
+
+impl RunStore {
+    pub fn open() -> Result<Self> {
+        let db_path = Self::db_path();
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let conn = Connection::open(&db_path)?;
+        conn.execute_batch(SCHEMA)?;
+        Ok(Self { conn })
+    }
+
+    fn db_path() -> PathBuf {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(".fluxion").join("runs.db")
+    }
+
+    pub fn new_run_id() -> String {
+        let secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let pid = std::process::id();
+        format!("run-{secs}-{pid}")
+    }
+
+    pub fn create_run(&self, run_id: &str, workflow_name: &str, workflow_path: &Path) -> Result<()> {
+        let now = now_secs();
+        self.conn.execute(
+            "INSERT INTO runs (id, workflow_name, workflow_path, started_at, status)
+             VALUES (?1, ?2, ?3, ?4, 'running')",
+            params![run_id, workflow_name, workflow_path.to_string_lossy().as_ref(), now],
+        )?;
+        Ok(())
+    }
+
+    pub fn upsert_job(&self, run_id: &str, job_id: &str, status: &JobStatus) -> Result<()> {
+        let (label, elapsed_ms, reason) = serialize_status(status);
+        self.conn.execute(
+            "INSERT INTO job_states (run_id, job_id, status, elapsed_ms, reason)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(run_id, job_id) DO UPDATE SET
+               status = excluded.status,
+               elapsed_ms = excluded.elapsed_ms,
+               reason = excluded.reason",
+            params![run_id, job_id, label, elapsed_ms, reason],
+        )?;
+        Ok(())
+    }
+
+    pub fn complete_run(&self, run_id: &str, success: bool) -> Result<()> {
+        let status = if success { "succeeded" } else { "failed" };
+        let now = now_secs();
+        self.conn.execute(
+            "UPDATE runs SET status = ?1, completed_at = ?2 WHERE id = ?3",
+            params![status, now, run_id],
+        )?;
+        Ok(())
+    }
+
+    /// Returns the workflow path and a map of job_id → JobStatus for a previous run.
+    pub fn load_run(&self, run_id: &str) -> Result<(String, HashMap<String, JobStatus>)> {
+        let workflow_path: String = self.conn.query_row(
+            "SELECT workflow_path FROM runs WHERE id = ?1",
+            params![run_id],
+            |row| row.get(0),
+        ).map_err(|_| anyhow::anyhow!("Run '{}' not found", run_id))?;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT job_id, status, elapsed_ms, reason FROM job_states WHERE run_id = ?1",
+        )?;
+
+        let jobs = stmt
+            .query_map(params![run_id], |row| {
+                let job_id: String = row.get(0)?;
+                let status: String = row.get(1)?;
+                let elapsed_ms: Option<u64> = row.get(2)?;
+                let reason: Option<String> = row.get(3)?;
+                Ok((job_id, status, elapsed_ms, reason))
+            })?
+            .filter_map(|r| r.ok())
+            .map(|(job_id, status, elapsed_ms, reason)| {
+                let elapsed = Duration::from_millis(elapsed_ms.unwrap_or(0));
+                let js = match status.as_str() {
+                    "succeeded" => JobStatus::Succeeded { elapsed },
+                    "failed" => JobStatus::Failed {
+                        elapsed,
+                        reason: reason.unwrap_or_default(),
+                    },
+                    "cancelled" => JobStatus::Cancelled,
+                    _ => JobStatus::Pending,
+                };
+                (job_id, js)
+            })
+            .collect();
+
+        Ok((workflow_path, jobs))
+    }
+
+    /// List recent runs, newest first.
+    pub fn list_runs(&self, limit: usize) -> Result<Vec<RunSummary>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, workflow_name, started_at, status FROM runs
+             ORDER BY started_at DESC LIMIT ?1",
+        )?;
+        let rows = stmt
+            .query_map(params![limit as i64], |row| {
+                Ok(RunSummary {
+                    id: row.get(0)?,
+                    workflow_name: row.get(1)?,
+                    started_at: row.get(2)?,
+                    status: row.get(3)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+}
+
+pub struct RunSummary {
+    pub id: String,
+    pub workflow_name: String,
+    pub started_at: u64,
+    pub status: String,
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn serialize_status(s: &JobStatus) -> (&'static str, Option<u64>, Option<String>) {
+    match s {
+        JobStatus::Succeeded { elapsed } => {
+            ("succeeded", Some(elapsed.as_millis() as u64), None)
+        }
+        JobStatus::Failed { elapsed, reason } => {
+            ("failed", Some(elapsed.as_millis() as u64), Some(reason.clone()))
+        }
+        JobStatus::Cancelled => ("cancelled", None, None),
+        JobStatus::Running => ("running", None, None),
+        _ => ("pending", None, None),
+    }
+}
