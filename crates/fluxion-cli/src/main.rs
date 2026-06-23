@@ -1,3 +1,4 @@
+mod mcp;
 mod telemetry;
 
 use anyhow::Result;
@@ -46,6 +47,8 @@ enum Commands {
         #[command(subcommand)]
         action: RunsCommands,
     },
+    /// Start the MCP server (stdio transport)
+    McpServe,
 }
 
 #[derive(Subcommand)]
@@ -71,7 +74,13 @@ enum RunsCommands {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let provider = telemetry::init(cli.trace);
+
+    // MCP server must not init tracing (stdout is used for the protocol)
+    let provider = if matches!(cli.command, Commands::McpServe) {
+        None
+    } else {
+        telemetry::init(cli.trace)
+    };
 
     let result = run(cli.command).await;
 
@@ -93,7 +102,7 @@ async fn run(command: Commands) -> Result<()> {
             let store = RunStore::open()?;
             let (workflow_path, _) = store.load_run(&run_id)?;
             let wf = Workflow::from_file(&workflow_path)
-                .map_err(|e| anyhow::anyhow!("Failed to load workflow from '{}': {}", workflow_path, e))?;
+                .map_err(|e| anyhow::anyhow!("Failed to load workflow '{}': {}", workflow_path, e))?;
             let wp = PathBuf::from(&workflow_path);
             let host = Arc::new(FluxionHost::new()?);
             scheduler::retry(&wf, &wp, host, &run_id, &from).await?;
@@ -124,6 +133,10 @@ async fn run(command: Commands) -> Result<()> {
                 }
             }
         },
+
+        Commands::McpServe => {
+            mcp::serve().await?;
+        }
     }
 
     Ok(())

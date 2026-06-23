@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use fluxion_core::{
     dag::Dag,
+    runner::{JobResult, RunResult},
     state::JobStatus,
     store::RunStore,
     workflow::Workflow,
@@ -15,36 +16,77 @@ use tracing::{info_span, Instrument};
 
 use crate::FluxionHost;
 
-/// Run a workflow from scratch.
-pub async fn run(wf: &Workflow, workflow_path: &Path, host: Arc<FluxionHost>) -> Result<()> {
-    let store = RunStore::open()?;
-    let run_id = RunStore::new_run_id();
-    store.create_run(&run_id, &wf.name, workflow_path)?;
-    println!("Run ID: {run_id}");
-
-    let span = info_span!("fluxion.run", run_id = %run_id, workflow = %wf.name);
-    let success = execute(wf, host, &store, &run_id, HashMap::new())
-        .instrument(span)
-        .await?;
-    store.complete_run(&run_id, success)?;
-    Ok(())
+/// Run a workflow from scratch, printing progress to stdout.
+pub async fn run(wf: &Workflow, workflow_path: &Path, host: Arc<FluxionHost>) -> Result<RunResult> {
+    run_inner(wf, workflow_path, host, HashMap::new(), true).await
 }
 
-/// Retry a previous run, re-executing `from_job` and all its downstream dependents.
+/// Run a workflow silently (no stdout) — for MCP / programmatic use.
+pub async fn run_silent(
+    wf: &Workflow,
+    workflow_path: &Path,
+    host: Arc<FluxionHost>,
+) -> Result<RunResult> {
+    run_inner(wf, workflow_path, host, HashMap::new(), false).await
+}
+
+/// Retry a previous run, re-executing `from_job` and all downstream dependents.
 pub async fn retry(
     wf: &Workflow,
     workflow_path: &Path,
     host: Arc<FluxionHost>,
     prev_run_id: &str,
     from_job: &str,
-) -> Result<()> {
-    let store = RunStore::open()?;
+) -> Result<RunResult> {
+    retry_inner(wf, workflow_path, host, prev_run_id, from_job, true).await
+}
 
+/// Retry silently — for MCP / programmatic use.
+pub async fn retry_silent(
+    wf: &Workflow,
+    workflow_path: &Path,
+    host: Arc<FluxionHost>,
+    prev_run_id: &str,
+    from_job: &str,
+) -> Result<RunResult> {
+    retry_inner(wf, workflow_path, host, prev_run_id, from_job, false).await
+}
+
+async fn run_inner(
+    wf: &Workflow,
+    workflow_path: &Path,
+    host: Arc<FluxionHost>,
+    pre_succeeded: HashMap<String, JobStatus>,
+    print_progress: bool,
+) -> Result<RunResult> {
+    let store = RunStore::open()?;
+    let run_id = RunStore::new_run_id();
+    store.create_run(&run_id, &wf.name, workflow_path)?;
+    if print_progress {
+        println!("Run ID: {run_id}");
+    }
+
+    let span = info_span!("fluxion.run", run_id = %run_id, workflow = %wf.name);
+    let result = execute(wf, host, &store, &run_id, pre_succeeded, print_progress)
+        .instrument(span)
+        .await?;
+    store.complete_run(&run_id, result.success)?;
+    Ok(result)
+}
+
+async fn retry_inner(
+    wf: &Workflow,
+    workflow_path: &Path,
+    host: Arc<FluxionHost>,
+    prev_run_id: &str,
+    from_job: &str,
+    print_progress: bool,
+) -> Result<RunResult> {
+    let store = RunStore::open()?;
     let (_, prev_states) = store.load_run(prev_run_id)?;
     let dag = Dag::build(wf)?;
     let replay_set = downstream_inclusive(&dag, from_job);
 
-    // Jobs that succeeded before and are NOT being replayed → skip them
     let pre_succeeded: HashMap<String, JobStatus> = prev_states
         .into_iter()
         .filter(|(id, status)| {
@@ -54,27 +96,30 @@ pub async fn retry(
 
     let run_id = RunStore::new_run_id();
     store.create_run(&run_id, &wf.name, workflow_path)?;
-    println!(
-        "Retry run ID: {run_id}  (from '{from_job}', skipping {} pre-succeeded jobs)",
-        pre_succeeded.len()
-    );
+    if print_progress {
+        println!(
+            "Retry run ID: {run_id}  (from '{from_job}', skipping {} pre-succeeded jobs)",
+            pre_succeeded.len()
+        );
+    }
 
     let span = info_span!("fluxion.run", run_id = %run_id, workflow = %wf.name, retry = true);
-    let success = execute(wf, host, &store, &run_id, pre_succeeded)
+    let result = execute(wf, host, &store, &run_id, pre_succeeded, print_progress)
         .instrument(span)
         .await?;
-    store.complete_run(&run_id, success)?;
-    Ok(())
+    store.complete_run(&run_id, result.success)?;
+    Ok(result)
 }
 
-/// Core execution loop. `pre_succeeded` jobs are treated as already done.
+/// Core execution loop. Returns a structured RunResult.
 async fn execute(
     wf: &Workflow,
     host: Arc<FluxionHost>,
     store: &RunStore,
     run_id: &str,
     pre_succeeded: HashMap<String, JobStatus>,
-) -> Result<bool> {
+    print_progress: bool,
+) -> Result<RunResult> {
     let dag = Dag::build(wf)?;
     let pad = wf.jobs.keys().map(|k| k.len()).max().unwrap_or(0);
 
@@ -84,42 +129,45 @@ async fn execute(
         .map(|k| (k.clone(), JobStatus::Pending))
         .collect();
 
+    let mut job_results: Vec<JobResult> = Vec::new();
+
     // Seed pre-succeeded jobs
     for (id, status) in &pre_succeeded {
         store.upsert_job(run_id, id, status)?;
         statuses.insert(id.clone(), status.clone());
         if let JobStatus::Succeeded { elapsed } = status {
-            println!(
-                "[skip] {:<pad$}  SUCCESS  {:.2}s  (previous run)",
-                id,
-                elapsed.as_secs_f64(),
-                pad = pad
-            );
+            if print_progress {
+                println!(
+                    "[skip] {:<pad$}  SUCCESS  {:.2}s  (previous run)",
+                    id,
+                    elapsed.as_secs_f64(),
+                    pad = pad
+                );
+            }
+            job_results.push(JobResult::from_succeeded(id.clone(), *elapsed, true));
         }
     }
 
     let (tx, mut rx) = mpsc::unbounded_channel::<JobEvent>();
 
-    // Launch roots not already pre-succeeded
     let mut in_flight = 0usize;
     for job_id in dag.roots() {
         if pre_succeeded.contains_key(&job_id) {
             continue;
         }
-        print_running(&job_id, pad);
+        if print_progress { print_running(&job_id, pad); }
         store.upsert_job(run_id, &job_id, &JobStatus::Running)?;
         launch(&job_id, wf, host.clone(), tx.clone());
         statuses.insert(job_id, JobStatus::Running);
         in_flight += 1;
     }
 
-    // Unlock non-root jobs whose deps are all pre-succeeded
     for (job_id, job) in &wf.jobs {
         if pre_succeeded.contains_key(job_id) || dag.roots().contains(job_id) {
             continue;
         }
         if job.depends_on.iter().all(|d| pre_succeeded.contains_key(d)) {
-            print_running(job_id, pad);
+            if print_progress { print_running(job_id, pad); }
             store.upsert_job(run_id, job_id, &JobStatus::Running)?;
             launch(job_id, wf, host.clone(), tx.clone());
             statuses.insert(job_id.clone(), JobStatus::Running);
@@ -133,50 +181,73 @@ async fn execute(
     while in_flight > 0 {
         let Some(event) = rx.recv().await else { break };
 
-        print_result(&event, pad);
+        if print_progress { print_result(&event, pad); }
         store.upsert_job(run_id, &event.job_id, &event.status)?;
         statuses.insert(event.job_id.clone(), event.status.clone());
         in_flight -= 1;
 
-        if let JobStatus::Failed { reason, .. } = &event.status {
-            overall_success = false;
-            eprintln!(
-                "\nReason:\n  {}\n\nRetry:\n  fluxion retry {} --from {}",
-                reason, run_id, event.job_id
-            );
-            break;
+        match &event.status {
+            JobStatus::Succeeded { elapsed } => {
+                job_results.push(JobResult::from_succeeded(event.job_id.clone(), *elapsed, false));
+            }
+            JobStatus::Failed { elapsed, reason } => {
+                overall_success = false;
+                job_results.push(JobResult::from_failed(
+                    event.job_id.clone(),
+                    *elapsed,
+                    reason.clone(),
+                ));
+                if print_progress {
+                    eprintln!(
+                        "\nReason:\n  {}\n\nRetry:\n  fluxion retry {} --from {}",
+                        reason, run_id, event.job_id
+                    );
+                }
+                break;
+            }
+            _ => {}
         }
 
-        for dep in dag.dependents.get(&event.job_id).into_iter().flatten() {
-            if pre_succeeded.contains_key(dep) {
-                continue;
-            }
-            let all_done = dag.deps[dep]
-                .iter()
-                .all(|d| matches!(statuses[d], JobStatus::Succeeded { .. }));
-            if all_done {
-                print_running(dep, pad);
-                store.upsert_job(run_id, dep, &JobStatus::Running)?;
-                launch(dep, wf, host.clone(), tx.clone());
-                statuses.insert(dep.clone(), JobStatus::Running);
-                in_flight += 1;
+        if overall_success {
+            for dep in dag.dependents.get(&event.job_id).into_iter().flatten() {
+                if pre_succeeded.contains_key(dep) {
+                    continue;
+                }
+                let all_done = dag.deps[dep]
+                    .iter()
+                    .all(|d| matches!(statuses[d], JobStatus::Succeeded { .. }));
+                if all_done {
+                    if print_progress { print_running(dep, pad); }
+                    store.upsert_job(run_id, dep, &JobStatus::Running)?;
+                    launch(dep, wf, host.clone(), tx.clone());
+                    statuses.insert(dep.clone(), JobStatus::Running);
+                    in_flight += 1;
+                }
             }
         }
     }
 
-    let total = workflow_start.elapsed();
-    let succeeded = statuses
-        .values()
-        .filter(|s| matches!(s, JobStatus::Succeeded { .. }))
-        .count();
-    println!(
-        "\nCompleted {}/{} jobs in {:.2}s",
-        succeeded,
-        dag.topo_order.len(),
-        total.as_secs_f64()
-    );
+    let total_elapsed_ms = workflow_start.elapsed().as_millis() as u64;
+    let succeeded = job_results.iter().filter(|j| j.status == "succeeded").count();
+    let total = dag.topo_order.len();
 
-    Ok(overall_success)
+    if print_progress {
+        println!(
+            "\nCompleted {}/{} jobs in {:.2}s",
+            succeeded, total,
+            total_elapsed_ms as f64 / 1000.0
+        );
+    }
+
+    Ok(RunResult {
+        run_id: run_id.to_string(),
+        workflow_name: wf.name.clone(),
+        jobs: job_results,
+        total_elapsed_ms,
+        succeeded,
+        total,
+        success: overall_success,
+    })
 }
 
 struct JobEvent {
@@ -225,7 +296,6 @@ fn launch(job_id: &str, wf: &Workflow, host: Arc<FluxionHost>, tx: mpsc::Unbound
     );
 }
 
-/// Collect `start` and all jobs reachable downstream from it (inclusive).
 fn downstream_inclusive<'a>(dag: &'a Dag, start: &'a str) -> std::collections::HashSet<&'a str> {
     let mut visited = std::collections::HashSet::new();
     let mut queue = std::collections::VecDeque::new();

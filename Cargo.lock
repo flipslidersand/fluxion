@@ -672,6 +672,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-stdout",
  "opentelemetry_sdk",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-opentelemetry",
@@ -686,6 +687,7 @@ dependencies = [
  "indexmap",
  "rusqlite",
  "serde",
+ "serde_json",
  "serde_yaml",
 ]
 
