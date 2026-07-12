@@ -11,9 +11,9 @@ jobs:
           - /tmp/fluxion-pipeline
       network:
         allow: []
-    limits:
-      memory_mb: 64
-      timeout_secs: 10
+      limits:
+        memory_mb: 64
+        timeout_secs: 10
 
   normalize:
     component: components/pipeline-stage/target/wasm32-wasip1/debug/pipeline_stage.wasm
@@ -27,9 +27,9 @@ jobs:
           - /tmp/fluxion-pipeline
       network:
         allow: []
-    limits:
-      memory_mb: 64
-      timeout_secs: 10
+      limits:
+        memory_mb: 64
+        timeout_secs: 10
 
   validate:
     component: components/pipeline-stage/target/wasm32-wasip1/debug/pipeline_stage.wasm
@@ -41,9 +41,9 @@ jobs:
           - /tmp/fluxion-pipeline
       network:
         allow: []
-    limits:
-      memory_mb: 64
-      timeout_secs: 10
+      limits:
+        memory_mb: 64
+        timeout_secs: 10
 
   export:
     component: components/pipeline-stage/target/wasm32-wasip1/debug/pipeline_stage.wasm
@@ -57,6 +57,6 @@ jobs:
           - /tmp/fluxion-output
       network:
         allow: []
-    limits:
-      memory_mb: 64
-      timeout_secs: 10
+      limits:
+        memory_mb: 64
+        timeout_secs: 10

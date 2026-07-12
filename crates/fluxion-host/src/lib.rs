@@ -4,9 +4,13 @@ use anyhow::{Context, Result};
 use fluxion_core::workflow::PermissionSet;
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
+use std::time::Duration;
 use wasmtime::component::{Component, Linker};
 use wasmtime::{Config, Engine, Store, StoreLimitsBuilder};
 use wasmtime_wasi::{DirPerms, FilePerms, ResourceTable, WasiCtx, WasiCtxBuilder, WasiView};
+
+// Epoch ticker resolution: 10 ticks per second → 100ms granularity.
+const TICKS_PER_SEC: u64 = 10;
 
 wasmtime::component::bindgen!({
     path: "../../wit/task.wit",
@@ -36,7 +40,19 @@ impl FluxionHost {
     pub fn new() -> Result<Self> {
         let mut config = Config::new();
         config.wasm_component_model(true);
+        // Epoch interruption allows the host to kill a running Wasm guest at any
+        // loop back-edge or function call — the only way to stop CPU-bound guests.
+        config.epoch_interruption(true);
         let engine = Engine::new(&config)?;
+
+        // Background thread advances the epoch counter every 100ms.
+        // The ticker runs for the process lifetime (detached thread is fine here).
+        let ticker = engine.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(1000 / TICKS_PER_SEC));
+            ticker.increment_epoch();
+        });
+
         Ok(Self { engine })
     }
 
@@ -58,6 +74,12 @@ impl FluxionHost {
         let mut store = Store::new(&self.engine, state);
         store.limiter(|s| &mut s.limits);
 
+        // Set the epoch deadline so CPU-bound guests are killed after timeout_secs.
+        // epoch_deadline_trap() makes the Wasm trap (propagated as Err) when the
+        // deadline fires, which terminates the blocking thread instead of leaking it.
+        store.set_epoch_deadline(perms.limits.timeout_secs * TICKS_PER_SEC);
+        store.epoch_deadline_trap();
+
         let component = Component::from_file(&self.engine, wasm_path)?;
         let instance = TaskComponent::instantiate(&mut store, &component, &linker)?;
 
@@ -66,15 +88,40 @@ impl FluxionHost {
             metadata: vec![],
         };
 
-        let result = instance
+        let call_result = instance
             .fluxion_task_processor()
-            .call_process(&mut store, &task_input)?;
+            .call_process(&mut store, &task_input);
 
-        match result {
-            Ok(output) => Ok(output.content),
-            Err(e) => anyhow::bail!("Component error: {}", e),
+        match call_result {
+            // Clean component-level error (returned via Result<_, String>)
+            Ok(Err(e)) => anyhow::bail!("Component error: {}", e),
+            Ok(Ok(output)) => Ok(output.content),
+            // Trap from the Wasm runtime — distinguish timeout from other traps
+            Err(trap) => {
+                if is_epoch_trap(&trap) {
+                    anyhow::bail!(
+                        "Timeout: killed after {}s (epoch interrupt)",
+                        perms.limits.timeout_secs
+                    )
+                } else {
+                    Err(trap)
+                }
+            }
         }
     }
+}
+
+// Detects whether an anyhow error originates from a wasmtime epoch interrupt trap.
+fn is_epoch_trap(e: &anyhow::Error) -> bool {
+    // wasmtime surfaces the epoch interrupt as Trap::Interrupt in the error chain.
+    for cause in e.chain() {
+        if let Some(trap) = cause.downcast_ref::<wasmtime::Trap>() {
+            if *trap == wasmtime::Trap::Interrupt {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 // An entry in the network allowlist: either an exact IP:port or all ports on an IP.
