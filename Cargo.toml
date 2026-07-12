@@ -4,7 +4,7 @@ members = [
     "crates/fluxion-core",
     "crates/fluxion-host",
 ]
-exclude = ["components/hello", "components/file-reader", "components/network-probe", "components/pipeline-stage", "components/spin"]
+exclude = ["components/hello", "components/file-reader", "components/network-probe", "components/pipeline-stage", "components/spin", "components/alloc-bomb"]
 resolver = "2"
 
 [workspace.dependencies]

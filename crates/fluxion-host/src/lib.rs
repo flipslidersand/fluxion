@@ -81,7 +81,18 @@ impl FluxionHost {
         store.epoch_deadline_trap();
 
         let component = Component::from_file(&self.engine, wasm_path)?;
-        let instance = TaskComponent::instantiate(&mut store, &component, &linker)?;
+        let instance = TaskComponent::instantiate(&mut store, &component, &linker)
+            .map_err(|e| {
+                if is_oom_error(&e) {
+                    anyhow::anyhow!(
+                        "OOM: component exceeded memory_mb={} limit ({})",
+                        perms.limits.memory_mb,
+                        e
+                    )
+                } else {
+                    e
+                }
+            })?;
 
         let task_input = exports::fluxion::task::processor::TaskInput {
             content: input,
@@ -109,6 +120,12 @@ impl FluxionHost {
             }
         }
     }
+}
+
+// Detects whether an error originates from a StoreLimits memory cap.
+fn is_oom_error(e: &anyhow::Error) -> bool {
+    let s = e.to_string();
+    s.contains("exceeds memory limits") || s.contains("memory allocation failed")
 }
 
 // Detects whether an anyhow error originates from a wasmtime epoch interrupt trap.
