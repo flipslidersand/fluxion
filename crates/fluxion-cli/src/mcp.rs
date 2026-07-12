@@ -153,6 +153,34 @@ async fn handle_request(method: &str, params: Option<&Value>) -> Result<Value> {
                             }
                         }
                     }
+                },
+                {
+                    "name": "workflow_status",
+                    "description": "Get detailed status of a specific run: run metadata and a per-job table showing status, elapsed time, and failure reason.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "run_id": {
+                                "type": "string",
+                                "description": "Run ID (e.g. run-1783861257-28913)"
+                            }
+                        },
+                        "required": ["run_id"]
+                    }
+                },
+                {
+                    "name": "workflow_logs",
+                    "description": "Get the job execution timeline for a specific run, reconstructed from stored elapsed times.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "run_id": {
+                                "type": "string",
+                                "description": "Run ID (e.g. run-1783861257-28913)"
+                            }
+                        },
+                        "required": ["run_id"]
+                    }
                 }
             ]
         })),
@@ -230,6 +258,72 @@ async fn dispatch_tool(name: &str, args: &Value) -> Result<String> {
                 .collect();
 
             Ok(serde_json::to_string_pretty(&items)?)
+        }
+
+        "workflow_status" => {
+            let run_id = args["run_id"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("missing 'run_id'"))?;
+
+            let store = RunStore::open()?;
+            let run = store.get_run(run_id)?;
+            let jobs = store.get_run_jobs(run_id)?;
+
+            let elapsed_s = run.completed_at
+                .map(|end| (end - run.started_at) as f64)
+                .unwrap_or(0.0);
+
+            let result = json!({
+                "run": {
+                    "id": run.id,
+                    "workflow_name": run.workflow_name,
+                    "workflow_path": run.workflow_path,
+                    "started_at": run.started_at,
+                    "elapsed_s": elapsed_s,
+                    "status": run.status,
+                },
+                "jobs": jobs.iter().map(|j| json!({
+                    "job_id": j.job_id,
+                    "status": j.status,
+                    "elapsed_ms": j.elapsed_ms,
+                    "reason": j.reason,
+                })).collect::<Vec<_>>()
+            });
+            Ok(serde_json::to_string_pretty(&result)?)
+        }
+
+        "workflow_logs" => {
+            let run_id = args["run_id"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("missing 'run_id'"))?;
+
+            let store = RunStore::open()?;
+            let run = store.get_run(run_id)?;
+            let jobs = store.get_run_jobs(run_id)?;
+
+            // Reconstruct approximate timeline from stored elapsed times.
+            let mut events: Vec<Value> = Vec::new();
+            let mut cursor = run.started_at;
+            for j in &jobs {
+                let elapsed_ms = j.elapsed_ms.unwrap_or(0);
+                events.push(json!({
+                    "ts": cursor,
+                    "job_id": j.job_id,
+                    "event": "RUNNING",
+                }));
+                cursor += elapsed_ms / 1000;
+                let mut entry = json!({
+                    "ts": cursor,
+                    "job_id": j.job_id,
+                    "event": j.status.to_uppercase(),
+                    "elapsed_s": elapsed_ms as f64 / 1000.0,
+                });
+                if let Some(ref reason) = j.reason {
+                    entry["reason"] = json!(reason);
+                }
+                events.push(entry);
+            }
+            Ok(serde_json::to_string_pretty(&events)?)
         }
 
         _ => Err(anyhow::anyhow!("Unknown tool: {}", name)),

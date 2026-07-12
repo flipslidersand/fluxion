@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "fluxion": {
+      "type": "stdio",
+      "command": "/home/dev-nodee/projects/flipslidersand/fluxion/target/debug/fluxion",
+      "args": ["mcp-serve"]
+    }
+  }
+}
