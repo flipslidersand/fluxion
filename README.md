@@ -58,14 +58,14 @@ fluxion/
 
 ## Status
 
-| Phase   | Description                   | Status     |
-| ------- | ----------------------------- | ---------- |
-| Phase 1 | Wasm component runtime + CLI  | ✅ Done    |
-| Phase 2 | YAML workflow + DAG scheduler | 🔲 Next    |
-| Phase 3 | Capability sandbox            | 🔲 Planned |
-| Phase 4 | Persistence + retry           | 🔲 Planned |
-| Phase 5 | OpenTelemetry observability   | 🔲 Planned |
-| Phase 6 | MCP / AI integration          | 🔲 Planned |
+| Phase   | Description                   | Status  |
+| ------- | ----------------------------- | ------- |
+| Phase 1 | Wasm component runtime + CLI  | ✅ Done |
+| Phase 2 | YAML workflow + DAG scheduler | ✅ Done |
+| Phase 3 | Capability sandbox            | ✅ Done |
+| Phase 4 | Persistence + retry           | ✅ Done |
+| Phase 5 | OpenTelemetry observability   | ✅ Done |
+| Phase 6 | MCP / AI integration          | ✅ Done |
 
 ## License
 

@@ -58,9 +58,14 @@ impl NetworkPermission {
     }
 }
 
+fn default_memory_mb() -> u64 { 256 }
+fn default_timeout_secs() -> u64 { 60 }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceLimits {
+    #[serde(default = "default_memory_mb")]
     pub memory_mb: u64,
+    #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
 }
 
@@ -94,5 +99,32 @@ impl Workflow {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn parse_network_sandbox_yaml() {
+        let src = r#"
+name: network-sandbox
+jobs:
+  connect-allowed:
+    component: foo.wasm
+    input: "127.0.0.1:19999"
+    permissions:
+      network:
+        allow: ["127.0.0.1:19999"]
+      limits:
+        timeout_secs: 5
+  connect-denied:
+    component: foo.wasm
+    input: "127.0.0.1:19999"
+    depends_on: [connect-allowed]
+"#;
+        let result: Result<Workflow, _> = serde_yaml::from_str(src);
+        println!("result: {result:?}");
+        assert!(result.is_ok());
     }
 }
