@@ -677,6 +677,7 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "wasmtime",
 ]
 
 [[package]]

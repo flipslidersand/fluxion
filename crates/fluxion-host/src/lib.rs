@@ -1,6 +1,6 @@
 pub mod scheduler;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use fluxion_core::workflow::PermissionSet;
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
@@ -115,17 +115,17 @@ fn build_wasi_ctx(perms: &PermissionSet) -> Result<WasiCtx> {
         }
     }
 
-    // Filesystem: preopen read-write dirs
+    // Filesystem: preopen read-write dirs (created on demand)
     for path in &perms.filesystem.write {
-        if path.exists() {
-            let guest = path.to_string_lossy().to_string();
-            builder.preopened_dir(
-                path,
-                &guest,
-                DirPerms::READ | DirPerms::MUTATE,
-                FilePerms::READ | FilePerms::WRITE,
-            )?;
-        }
+        std::fs::create_dir_all(path)
+            .with_context(|| format!("Failed to create write dir {:?}", path))?;
+        let guest = path.to_string_lossy().to_string();
+        builder.preopened_dir(
+            path,
+            &guest,
+            DirPerms::READ | DirPerms::MUTATE,
+            FilePerms::READ | FilePerms::WRITE,
+        )?;
     }
 
     // Network capability gate.
