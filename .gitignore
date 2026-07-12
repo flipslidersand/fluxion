@@ -1,2 +1,2 @@
 /target
-/components/hello/target
+components/*/target
