@@ -128,6 +128,47 @@ impl RunStore {
         Ok((workflow_path, jobs))
     }
 
+    /// Fetch metadata for a single run.
+    pub fn get_run(&self, run_id: &str) -> Result<RunDetail> {
+        self.conn
+            .query_row(
+                "SELECT id, workflow_name, workflow_path, started_at, completed_at, status
+                 FROM runs WHERE id = ?1",
+                params![run_id],
+                |row| {
+                    Ok(RunDetail {
+                        id: row.get(0)?,
+                        workflow_name: row.get(1)?,
+                        workflow_path: row.get(2)?,
+                        started_at: row.get(3)?,
+                        completed_at: row.get(4)?,
+                        status: row.get(5)?,
+                    })
+                },
+            )
+            .map_err(|_| anyhow::anyhow!("Run '{}' not found", run_id))
+    }
+
+    /// Fetch all job records for a run in insertion order.
+    pub fn get_run_jobs(&self, run_id: &str) -> Result<Vec<JobDetail>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT job_id, status, elapsed_ms, reason
+             FROM job_states WHERE run_id = ?1 ORDER BY rowid",
+        )?;
+        let jobs = stmt
+            .query_map(params![run_id], |row| {
+                Ok(JobDetail {
+                    job_id: row.get(0)?,
+                    status: row.get(1)?,
+                    elapsed_ms: row.get(2)?,
+                    reason: row.get(3)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(jobs)
+    }
+
     /// List recent runs, newest first.
     pub fn list_runs(&self, limit: usize) -> Result<Vec<RunSummary>> {
         let mut stmt = self.conn.prepare(
@@ -154,6 +195,22 @@ pub struct RunSummary {
     pub workflow_name: String,
     pub started_at: u64,
     pub status: String,
+}
+
+pub struct RunDetail {
+    pub id: String,
+    pub workflow_name: String,
+    pub workflow_path: String,
+    pub started_at: u64,
+    pub completed_at: Option<u64>,
+    pub status: String,
+}
+
+pub struct JobDetail {
+    pub job_id: String,
+    pub status: String,
+    pub elapsed_ms: Option<u64>,
+    pub reason: Option<String>,
 }
 
 fn now_secs() -> u64 {

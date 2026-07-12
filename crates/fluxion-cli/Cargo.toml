@@ -20,3 +20,4 @@ opentelemetry_sdk     = { workspace = true }
 opentelemetry-stdout  = { workspace = true }
 fluxion-core          = { path = "../fluxion-core" }
 fluxion-host          = { path = "../fluxion-host" }
+wasmtime              = { workspace = true }

@@ -37,6 +37,19 @@ enum Commands {
         #[arg(long)]
         from: String,
     },
+    /// Show detailed status of a previous run
+    Status {
+        run_id: String,
+    },
+    /// Show job timeline and failure reasons for a previous run
+    Logs {
+        run_id: String,
+    },
+    /// Show interface and capability requirements of a Wasm component
+    Inspect {
+        /// Path to the .wasm component file
+        path: String,
+    },
     /// Execute a single Wasm component
     Component {
         #[command(subcommand)]
@@ -108,6 +121,18 @@ async fn run(command: Commands) -> Result<()> {
             scheduler::retry(&wf, &wp, host, &run_id, &from).await?;
         }
 
+        Commands::Status { run_id } => {
+            cmd_status(&run_id)?;
+        }
+
+        Commands::Logs { run_id } => {
+            cmd_logs(&run_id)?;
+        }
+
+        Commands::Inspect { path } => {
+            cmd_inspect(&path)?;
+        }
+
         Commands::Component { action } => match action {
             ComponentCommands::Run { path, input } => {
                 let host = FluxionHost::new()?;
@@ -140,4 +165,137 @@ async fn run(command: Commands) -> Result<()> {
     }
 
     Ok(())
+}
+
+// ── fluxion status ────────────────────────────────────────────────────────────
+
+fn cmd_status(run_id: &str) -> Result<()> {
+    let store = RunStore::open()?;
+    let run = store.get_run(run_id)?;
+    let jobs = store.get_run_jobs(run_id)?;
+
+    let elapsed_s = run.completed_at
+        .map(|end| (end - run.started_at) as f64)
+        .unwrap_or(0.0);
+
+    println!("Run:      {}", run.id);
+    println!("Workflow: {}", run.workflow_name);
+    println!("Started:  {}", fmt_unix(run.started_at));
+    println!("Elapsed:  {:.2}s", elapsed_s);
+    println!("Status:   {}", run.status.to_uppercase());
+
+    if jobs.is_empty() {
+        return Ok(());
+    }
+
+    let pad = jobs.iter().map(|j| j.job_id.len()).max().unwrap_or(0);
+    println!();
+    println!("  {:<pad$}  STATUS   ELAPSED", "JOB", pad = pad);
+    println!("  {}", "-".repeat(pad + 20));
+    for j in &jobs {
+        let elapsed = j.elapsed_ms.map(|ms| format!("{:.2}s", ms as f64 / 1000.0))
+            .unwrap_or_else(|| "-".to_string());
+        println!("  {:<pad$}  {:<8} {}", j.job_id, j.status.to_uppercase(), elapsed, pad = pad);
+        if let Some(ref reason) = j.reason {
+            println!("    Reason: {}", reason);
+        }
+    }
+    Ok(())
+}
+
+// ── fluxion logs ──────────────────────────────────────────────────────────────
+
+fn cmd_logs(run_id: &str) -> Result<()> {
+    let store = RunStore::open()?;
+    let run = store.get_run(run_id)?;
+    let jobs = store.get_run_jobs(run_id)?;
+
+    let pad = jobs.iter().map(|j| j.job_id.len()).max().unwrap_or(0);
+
+    // Reconstruct a timeline by accumulating elapsed from run start.
+    let mut cursor = run.started_at;
+    for j in &jobs {
+        let elapsed_ms = j.elapsed_ms.unwrap_or(0);
+        println!(
+            "[{}] {:<pad$}  RUNNING",
+            fmt_unix(cursor),
+            j.job_id,
+            pad = pad
+        );
+        cursor += elapsed_ms / 1000;
+        let elapsed_s = elapsed_ms as f64 / 1000.0;
+        println!(
+            "[{}] {:<pad$}  {}  {:.2}s",
+            fmt_unix(cursor),
+            j.job_id,
+            j.status.to_uppercase(),
+            elapsed_s,
+            pad = pad,
+        );
+        if let Some(ref reason) = j.reason {
+            println!("  {}", reason);
+        }
+    }
+    Ok(())
+}
+
+// ── fluxion inspect ───────────────────────────────────────────────────────────
+
+fn cmd_inspect(path: &str) -> Result<()> {
+    use wasmtime::{Config, Engine};
+    use wasmtime::component::Component;
+
+    let meta = std::fs::metadata(path)
+        .map_err(|e| anyhow::anyhow!("Cannot read '{}': {}", path, e))?;
+
+    let mut config = Config::new();
+    config.wasm_component_model(true);
+    let engine = Engine::new(&config)?;
+
+    let component = Component::from_file(&engine, path)
+        .map_err(|e| anyhow::anyhow!("Not a valid Wasm component '{}': {}", path, e))?;
+
+    let ct = component.component_type();
+
+    println!("Path:  {}", path);
+    println!("Size:  {} bytes ({:.1} KB)", meta.len(), meta.len() as f64 / 1024.0);
+
+    let exports: Vec<_> = ct.exports(&engine).collect();
+    println!();
+    println!("Exports ({}):", exports.len());
+    for (name, item) in &exports {
+        println!("  {}  [{}]", name, component_item_kind(item));
+    }
+
+    let imports: Vec<_> = ct.imports(&engine).collect();
+    if !imports.is_empty() {
+        println!();
+        println!("Imports ({}):", imports.len());
+        for (name, item) in &imports {
+            println!("  {}  [{}]", name, component_item_kind(item));
+        }
+    }
+    Ok(())
+}
+
+fn component_item_kind(item: &wasmtime::component::types::ComponentItem) -> &'static str {
+    use wasmtime::component::types::ComponentItem;
+    match item {
+        ComponentItem::ComponentFunc(_) => "func",
+        ComponentItem::CoreFunc(_) => "core-func",
+        ComponentItem::Module(_) => "module",
+        ComponentItem::Component(_) => "component",
+        ComponentItem::ComponentInstance(_) => "instance",
+        ComponentItem::Type(_) => "type",
+        ComponentItem::Resource(_) => "resource",
+    }
+}
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+fn fmt_unix(secs: u64) -> String {
+    let h = (secs / 3600) % 24;
+    let m = (secs / 60) % 60;
+    let s = secs % 60;
+    format!("{:02}:{:02}:{:02}", h, m, s)
 }
