@@ -12,7 +12,7 @@ use fluxion_core::{
     workflow::Workflow,
 };
 use tokio::sync::mpsc;
-use tracing::{info_span, Instrument};
+use tracing::{Instrument, info_span};
 
 use crate::FluxionHost;
 
@@ -155,7 +155,9 @@ async fn execute(
         if pre_succeeded.contains_key(&job_id) {
             continue;
         }
-        if print_progress { print_running(&job_id, pad); }
+        if print_progress {
+            print_running(&job_id, pad);
+        }
         store.upsert_job(run_id, &job_id, &JobStatus::Running)?;
         launch(&job_id, wf, host.clone(), tx.clone());
         statuses.insert(job_id, JobStatus::Running);
@@ -167,7 +169,9 @@ async fn execute(
             continue;
         }
         if job.depends_on.iter().all(|d| pre_succeeded.contains_key(d)) {
-            if print_progress { print_running(job_id, pad); }
+            if print_progress {
+                print_running(job_id, pad);
+            }
             store.upsert_job(run_id, job_id, &JobStatus::Running)?;
             launch(job_id, wf, host.clone(), tx.clone());
             statuses.insert(job_id.clone(), JobStatus::Running);
@@ -181,14 +185,20 @@ async fn execute(
     while in_flight > 0 {
         let Some(event) = rx.recv().await else { break };
 
-        if print_progress { print_result(&event, pad); }
+        if print_progress {
+            print_result(&event, pad);
+        }
         store.upsert_job(run_id, &event.job_id, &event.status)?;
         statuses.insert(event.job_id.clone(), event.status.clone());
         in_flight -= 1;
 
         match &event.status {
             JobStatus::Succeeded { elapsed } => {
-                job_results.push(JobResult::from_succeeded(event.job_id.clone(), *elapsed, false));
+                job_results.push(JobResult::from_succeeded(
+                    event.job_id.clone(),
+                    *elapsed,
+                    false,
+                ));
             }
             JobStatus::Failed { elapsed, reason } => {
                 overall_success = false;
@@ -217,7 +227,9 @@ async fn execute(
                     .iter()
                     .all(|d| matches!(statuses[d], JobStatus::Succeeded { .. }));
                 if all_done {
-                    if print_progress { print_running(dep, pad); }
+                    if print_progress {
+                        print_running(dep, pad);
+                    }
                     store.upsert_job(run_id, dep, &JobStatus::Running)?;
                     launch(dep, wf, host.clone(), tx.clone());
                     statuses.insert(dep.clone(), JobStatus::Running);
@@ -228,13 +240,17 @@ async fn execute(
     }
 
     let total_elapsed_ms = workflow_start.elapsed().as_millis() as u64;
-    let succeeded = job_results.iter().filter(|j| j.status == "succeeded").count();
+    let succeeded = job_results
+        .iter()
+        .filter(|j| j.status == "succeeded")
+        .count();
     let total = dag.topo_order.len();
 
     if print_progress {
         println!(
             "\nCompleted {}/{} jobs in {:.2}s",
-            succeeded, total,
+            succeeded,
+            total,
             total_elapsed_ms as f64 / 1000.0
         );
     }
@@ -255,10 +271,19 @@ struct JobEvent {
     status: JobStatus,
 }
 
-fn launch(job_id: &str, wf: &Workflow, host: Arc<FluxionHost>, tx: mpsc::UnboundedSender<JobEvent>) {
+fn launch(
+    job_id: &str,
+    wf: &Workflow,
+    host: Arc<FluxionHost>,
+    tx: mpsc::UnboundedSender<JobEvent>,
+) {
     let job_id = job_id.to_string();
     let component = wf.jobs[&job_id].component.clone();
-    let input = wf.jobs[&job_id].input.clone().unwrap_or_default().into_bytes();
+    let input = wf.jobs[&job_id]
+        .input
+        .clone()
+        .unwrap_or_default()
+        .into_bytes();
     let perms = wf.jobs[&job_id].permissions.clone();
     let timeout_secs = perms.limits.timeout_secs;
 
@@ -280,8 +305,14 @@ fn launch(job_id: &str, wf: &Workflow, host: Arc<FluxionHost>, tx: mpsc::Unbound
                     reason: format!("Timeout after {}s", timeout_secs),
                 },
                 Ok(Ok(Ok(_))) => JobStatus::Succeeded { elapsed },
-                Ok(Ok(Err(e))) => JobStatus::Failed { elapsed, reason: e.to_string() },
-                Ok(Err(e)) => JobStatus::Failed { elapsed, reason: e.to_string() },
+                Ok(Ok(Err(e))) => JobStatus::Failed {
+                    elapsed,
+                    reason: e.to_string(),
+                },
+                Ok(Err(e)) => JobStatus::Failed {
+                    elapsed,
+                    reason: e.to_string(),
+                },
             };
 
             tracing::info!(

@@ -58,8 +58,12 @@ impl NetworkPermission {
     }
 }
 
-fn default_memory_mb() -> u64 { 256 }
-fn default_timeout_secs() -> u64 { 60 }
+fn default_memory_mb() -> u64 {
+    256
+}
+fn default_timeout_secs() -> u64 {
+    60
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceLimits {
@@ -71,7 +75,10 @@ pub struct ResourceLimits {
 
 impl Default for ResourceLimits {
     fn default() -> Self {
-        Self { memory_mb: 256, timeout_secs: 60 }
+        Self {
+            memory_mb: 256,
+            timeout_secs: 60,
+        }
     }
 }
 

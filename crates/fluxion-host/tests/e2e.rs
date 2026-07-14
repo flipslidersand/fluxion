@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use fluxion_core::workflow::Workflow;
-use fluxion_host::{scheduler, FluxionHost};
+use fluxion_host::{FluxionHost, scheduler};
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -17,6 +17,16 @@ fn wasm(component: &str) -> String {
         .join("components")
         .join(component)
         .join(format!("target/wasm32-wasip1/debug/{bin}.wasm"))
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn wasm2(component: &str) -> String {
+    let bin = component.replace('-', "_");
+    workspace_root()
+        .join("components")
+        .join(component)
+        .join(format!("target/wasm32-wasip2/debug/{bin}.wasm"))
         .to_string_lossy()
         .into_owned()
 }
@@ -75,7 +85,11 @@ async fn vehicle_pipeline_validate_retry() {
         .await
         .unwrap();
     assert!(!r1.success, "first run should fail at validate");
-    let failed = r1.jobs.iter().find(|j| j.status == "failed").expect("failed job");
+    let failed = r1
+        .jobs
+        .iter()
+        .find(|j| j.status == "failed")
+        .expect("failed job");
     assert_eq!(failed.job_id, "validate");
     assert!(
         failed.reason.as_deref().unwrap_or("").contains("1999"),
@@ -91,7 +105,11 @@ async fn vehicle_pipeline_validate_retry() {
     let r2 = scheduler::retry_silent(&wf, &wf_path, host, &r1.run_id, "validate")
         .await
         .unwrap();
-    assert!(r2.success, "retry should succeed after fixing the year: {:?}", r2);
+    assert!(
+        r2.success,
+        "retry should succeed after fixing the year: {:?}",
+        r2
+    );
 
     let _ = std::fs::remove_dir_all(&data_dir);
     let _ = std::fs::remove_dir_all(&out_dir);
@@ -107,7 +125,10 @@ async fn resource_limits_spin_timeout() {
 
     let result = scheduler::run_silent(&wf, &wf_path, host).await.unwrap();
 
-    assert!(!result.success, "workflow should fail due to spin-forever timeout");
+    assert!(
+        !result.success,
+        "workflow should fail due to spin-forever timeout"
+    );
     let failed = result
         .jobs
         .iter()
@@ -119,6 +140,113 @@ async fn resource_limits_spin_timeout() {
         failed.elapsed_ms < 5_000,
         "epoch interruption should kill the job well under 5s, got {}ms",
         failed.elapsed_ms
+    );
+}
+
+/// three-stage: simple sequential pipeline — all 3 hello jobs succeed in order.
+#[tokio::test]
+#[ignore = "requires pre-built Wasm components"]
+async fn three_stage_sequential() {
+    let host = Arc::new(FluxionHost::new().unwrap());
+    let wf_path = workspace_root().join("examples").join("three-stage.yaml");
+    let mut wf = Workflow::from_file(&wf_path).expect("load yaml");
+    let hello = wasm("hello");
+    for job in wf.jobs.values_mut() {
+        job.component = hello.clone();
+    }
+
+    let result = scheduler::run_silent(&wf, &wf_path, host).await.unwrap();
+
+    assert!(
+        result.success,
+        "all three stages should succeed: {:?}",
+        result
+    );
+    assert_eq!(result.jobs.len(), 3, "expected 3 job results");
+    for job in &result.jobs {
+        assert_eq!(job.status, "succeeded", "job {} should succeed", job.job_id);
+    }
+}
+
+/// sandbox-demo: read-allowed succeeds (FS cap grants /tmp),
+/// read-denied fails (no filesystem permission granted).
+#[tokio::test]
+#[ignore = "requires pre-built Wasm components"]
+async fn sandbox_fs_cap() {
+    let test_file = format!("/tmp/fluxion-e2e-{}.txt", std::process::id());
+    std::fs::write(&test_file, "hello from e2e test").unwrap();
+
+    let host = Arc::new(FluxionHost::new().unwrap());
+    let wf_path = workspace_root().join("examples").join("sandbox-demo.yaml");
+    let mut wf = Workflow::from_file(&wf_path).expect("load yaml");
+    let file_reader = wasm("file-reader");
+    for job in wf.jobs.values_mut() {
+        job.component = file_reader.clone();
+        if let Some(input) = &job.input {
+            job.input = Some(input.replace("/tmp/fluxion-test.txt", &test_file));
+        }
+    }
+
+    let result = scheduler::run_silent(&wf, &wf_path, host).await.unwrap();
+
+    assert!(!result.success, "workflow should fail at read-denied");
+    let allowed = result
+        .jobs
+        .iter()
+        .find(|j| j.job_id == "read-allowed")
+        .expect("read-allowed");
+    assert_eq!(
+        allowed.status, "succeeded",
+        "read-allowed should succeed with /tmp permission"
+    );
+    let denied = result
+        .jobs
+        .iter()
+        .find(|j| j.job_id == "read-denied")
+        .expect("read-denied");
+    assert_eq!(
+        denied.status, "failed",
+        "read-denied should fail without filesystem permission"
+    );
+
+    let _ = std::fs::remove_file(&test_file);
+}
+
+/// network-sandbox: connect-allowed reaches 127.0.0.1:19999 (ECONNREFUSED = OK, cap passed),
+/// connect-denied is blocked before reaching the network (empty allowlist).
+#[tokio::test]
+#[ignore = "requires pre-built Wasm components"]
+async fn sandbox_network_cap() {
+    let host = Arc::new(FluxionHost::new().unwrap());
+    let wf_path = workspace_root()
+        .join("examples")
+        .join("network-sandbox.yaml");
+    let mut wf = Workflow::from_file(&wf_path).expect("load yaml");
+    let probe = wasm2("network-probe");
+    for job in wf.jobs.values_mut() {
+        job.component = probe.clone();
+    }
+
+    let result = scheduler::run_silent(&wf, &wf_path, host).await.unwrap();
+
+    assert!(!result.success, "workflow should fail at connect-denied");
+    let allowed = result
+        .jobs
+        .iter()
+        .find(|j| j.job_id == "connect-allowed")
+        .expect("connect-allowed");
+    assert_eq!(
+        allowed.status, "succeeded",
+        "connect-allowed should reach the address (ECONNREFUSED = cap passed)"
+    );
+    let denied = result
+        .jobs
+        .iter()
+        .find(|j| j.job_id == "connect-denied")
+        .expect("connect-denied");
+    assert_eq!(
+        denied.status, "failed",
+        "connect-denied should be blocked by empty allowlist"
     );
 }
 
@@ -139,17 +267,32 @@ async fn memory_limits_oom_enforcement() {
         .iter()
         .find(|j| j.job_id == "ok-job")
         .expect("ok-job result");
-    assert_eq!(ok.status, "succeeded", "ok-job should succeed (1MB within 16MB limit)");
+    assert_eq!(
+        ok.status, "succeeded",
+        "ok-job should succeed (1MB within 16MB limit)"
+    );
 
     let oom = result
         .jobs
         .iter()
         .find(|j| j.job_id == "oom-job")
         .expect("oom-job result");
-    assert_eq!(oom.status, "failed", "oom-job should fail (10MB exceeds 1MB limit)");
+    assert_eq!(
+        oom.status, "failed",
+        "oom-job should fail (10MB exceeds 1MB limit)"
+    );
     assert!(
-        oom.reason.as_deref().unwrap_or("").to_lowercase().contains("oom")
-            || oom.reason.as_deref().unwrap_or("").to_lowercase().contains("memory"),
+        oom.reason
+            .as_deref()
+            .unwrap_or("")
+            .to_lowercase()
+            .contains("oom")
+            || oom
+                .reason
+                .as_deref()
+                .unwrap_or("")
+                .to_lowercase()
+                .contains("memory"),
         "failure reason should mention OOM/memory: {:?}",
         oom.reason
     );

@@ -58,12 +58,22 @@ impl RunStore {
         format!("run-{ms}-{pid}-{seq}")
     }
 
-    pub fn create_run(&self, run_id: &str, workflow_name: &str, workflow_path: &Path) -> Result<()> {
+    pub fn create_run(
+        &self,
+        run_id: &str,
+        workflow_name: &str,
+        workflow_path: &Path,
+    ) -> Result<()> {
         let now = now_secs();
         self.conn.execute(
             "INSERT INTO runs (id, workflow_name, workflow_path, started_at, status)
              VALUES (?1, ?2, ?3, ?4, 'running')",
-            params![run_id, workflow_name, workflow_path.to_string_lossy().as_ref(), now],
+            params![
+                run_id,
+                workflow_name,
+                workflow_path.to_string_lossy().as_ref(),
+                now
+            ],
         )?;
         Ok(())
     }
@@ -94,11 +104,14 @@ impl RunStore {
 
     /// Returns the workflow path and a map of job_id → JobStatus for a previous run.
     pub fn load_run(&self, run_id: &str) -> Result<(String, HashMap<String, JobStatus>)> {
-        let workflow_path: String = self.conn.query_row(
-            "SELECT workflow_path FROM runs WHERE id = ?1",
-            params![run_id],
-            |row| row.get(0),
-        ).map_err(|_| anyhow::anyhow!("Run '{}' not found", run_id))?;
+        let workflow_path: String = self
+            .conn
+            .query_row(
+                "SELECT workflow_path FROM runs WHERE id = ?1",
+                params![run_id],
+                |row| row.get(0),
+            )
+            .map_err(|_| anyhow::anyhow!("Run '{}' not found", run_id))?;
 
         let mut stmt = self.conn.prepare(
             "SELECT job_id, status, elapsed_ms, reason FROM job_states WHERE run_id = ?1",
@@ -225,12 +238,12 @@ fn now_secs() -> u64 {
 
 fn serialize_status(s: &JobStatus) -> (&'static str, Option<u64>, Option<String>) {
     match s {
-        JobStatus::Succeeded { elapsed } => {
-            ("succeeded", Some(elapsed.as_millis() as u64), None)
-        }
-        JobStatus::Failed { elapsed, reason } => {
-            ("failed", Some(elapsed.as_millis() as u64), Some(reason.clone()))
-        }
+        JobStatus::Succeeded { elapsed } => ("succeeded", Some(elapsed.as_millis() as u64), None),
+        JobStatus::Failed { elapsed, reason } => (
+            "failed",
+            Some(elapsed.as_millis() as u64),
+            Some(reason.clone()),
+        ),
         JobStatus::Cancelled => ("cancelled", None, None),
         JobStatus::Running => ("running", None, None),
         _ => ("pending", None, None),

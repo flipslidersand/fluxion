@@ -48,9 +48,11 @@ impl FluxionHost {
         // Background thread advances the epoch counter every 100ms.
         // The ticker runs for the process lifetime (detached thread is fine here).
         let ticker = engine.clone();
-        std::thread::spawn(move || loop {
-            std::thread::sleep(Duration::from_millis(1000 / TICKS_PER_SEC));
-            ticker.increment_epoch();
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_millis(1000 / TICKS_PER_SEC));
+                ticker.increment_epoch();
+            }
         });
 
         Ok(Self { engine })
@@ -70,7 +72,11 @@ impl FluxionHost {
             .memory_size(perms.limits.memory_mb as usize * 1024 * 1024)
             .build();
 
-        let state = HostState { ctx, table: ResourceTable::new(), limits };
+        let state = HostState {
+            ctx,
+            table: ResourceTable::new(),
+            limits,
+        };
         let mut store = Store::new(&self.engine, state);
         store.limiter(|s| &mut s.limits);
 
@@ -81,8 +87,8 @@ impl FluxionHost {
         store.epoch_deadline_trap();
 
         let component = Component::from_file(&self.engine, wasm_path)?;
-        let instance = TaskComponent::instantiate(&mut store, &component, &linker)
-            .map_err(|e| {
+        let instance =
+            TaskComponent::instantiate(&mut store, &component, &linker).map_err(|e| {
                 if is_oom_error(&e) {
                     anyhow::anyhow!(
                         "OOM: component exceeded memory_mb={} limit ({})",
@@ -132,10 +138,10 @@ fn is_oom_error(e: &anyhow::Error) -> bool {
 fn is_epoch_trap(e: &anyhow::Error) -> bool {
     // wasmtime surfaces the epoch interrupt as Trap::Interrupt in the error chain.
     for cause in e.chain() {
-        if let Some(trap) = cause.downcast_ref::<wasmtime::Trap>() {
-            if *trap == wasmtime::Trap::Interrupt {
-                return true;
-            }
+        if let Some(trap) = cause.downcast_ref::<wasmtime::Trap>()
+            && *trap == wasmtime::Trap::Interrupt
+        {
+            return true;
         }
     }
     false
@@ -197,7 +203,9 @@ fn build_wasi_ctx(perms: &PermissionSet) -> Result<WasiCtx> {
     // deny-all requires no extra work. We only install a check when an explicit
     // allowlist is provided.
     if !perms.network.allow.is_empty() {
-        let entries: Vec<NetworkEntry> = perms.network.allow
+        let entries: Vec<NetworkEntry> = perms
+            .network
+            .allow
             .iter()
             .filter_map(|s| parse_network_entry(s))
             .collect();
