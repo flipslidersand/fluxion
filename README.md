@@ -1,5 +1,7 @@
 # Fluxion
 
+[![CI](https://github.com/flipslidersand/fluxion/actions/workflows/ci.yml/badge.svg)](https://github.com/flipslidersand/fluxion/actions/workflows/ci.yml)
+
 Safe Wasm-based job execution engine with capability-controlled sandboxing and DAG scheduling.
 
 Each job runs as a WebAssembly component — isolated, permission-scoped, and language-agnostic.
@@ -17,8 +19,8 @@ Each job runs as a WebAssembly component — isolated, permission-scoped, and la
 git clone https://github.com/flipslidersand/fluxion
 cd fluxion
 
-# Build the CLI
-cargo build
+# Build the CLI (use -j2 to avoid OOM — wasmtime is large)
+cargo build -j2
 
 # Build components (each is an independent workspace)
 for c in hello file-reader pipeline-stage spin alloc-bomb; do
