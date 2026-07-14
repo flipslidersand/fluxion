@@ -47,12 +47,15 @@ impl RunStore {
     }
 
     pub fn new_run_id() -> String {
-        let secs = SystemTime::now()
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs();
+            .as_millis() as u64;
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
         let pid = std::process::id();
-        format!("run-{secs}-{pid}")
+        format!("run-{ms}-{pid}-{seq}")
     }
 
     pub fn create_run(&self, run_id: &str, workflow_name: &str, workflow_path: &Path) -> Result<()> {
