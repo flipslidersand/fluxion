@@ -8,11 +8,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
 use fluxion_core::{store::RunStore, workflow::Workflow};
-use fluxion_host::{scheduler, FluxionHost};
+use fluxion_host::{FluxionHost, scheduler};
 
 // ── Transport ────────────────────────────────────────────────────────────────
 
@@ -214,7 +214,9 @@ async fn dispatch_tool(name: &str, args: &Value) -> Result<String> {
 
             let wf = Workflow::from_file(path)
                 .map_err(|e| anyhow::anyhow!("Failed to load '{}': {}", path, e))?;
-            let workflow_path = PathBuf::from(path).canonicalize().unwrap_or(PathBuf::from(path));
+            let workflow_path = PathBuf::from(path)
+                .canonicalize()
+                .unwrap_or(PathBuf::from(path));
             let host = Arc::new(FluxionHost::new()?);
 
             let result = scheduler::run_silent(&wf, &workflow_path, host).await?;
@@ -269,7 +271,8 @@ async fn dispatch_tool(name: &str, args: &Value) -> Result<String> {
             let run = store.get_run(run_id)?;
             let jobs = store.get_run_jobs(run_id)?;
 
-            let elapsed_s = run.completed_at
+            let elapsed_s = run
+                .completed_at
                 .map(|end| (end - run.started_at) as f64)
                 .unwrap_or(0.0);
 
