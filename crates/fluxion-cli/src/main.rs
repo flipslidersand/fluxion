@@ -149,7 +149,7 @@ async fn run(command: Commands) -> Result<()> {
                 if runs.is_empty() {
                     println!("No runs found.");
                 } else {
-                    println!("{:<28}  {:<20}  {}", "RUN ID", "WORKFLOW", "STATUS");
+                    println!("{:<28}  {:<20}  STATUS", "RUN ID", "WORKFLOW");
                     println!("{}", "-".repeat(60));
                     for r in runs {
                         println!("{:<28}  {:<20}  {}", r.id, r.workflow_name, r.status);
