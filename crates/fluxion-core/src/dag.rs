@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use std::collections::{HashMap, VecDeque};
 
 use crate::workflow::Workflow;
@@ -24,12 +24,19 @@ impl Dag {
             wf.jobs.keys().map(|k| (k.clone(), vec![])).collect();
         for (job_id, job_deps) in &deps {
             for dep in job_deps {
-                dependents.entry(dep.clone()).or_default().push(job_id.clone());
+                dependents
+                    .entry(dep.clone())
+                    .or_default()
+                    .push(job_id.clone());
             }
         }
 
         let topo_order = kahn_sort(&deps)?;
-        Ok(Self { topo_order, deps, dependents })
+        Ok(Self {
+            topo_order,
+            deps,
+            dependents,
+        })
     }
 
     /// Jobs with no dependencies — can start immediately.
@@ -45,10 +52,8 @@ impl Dag {
 /// Kahn's algorithm: topological sort. Errors on cycle.
 fn kahn_sort(deps: &HashMap<String, Vec<String>>) -> Result<Vec<String>> {
     // indegree[job] = number of unmet dependencies
-    let mut indegree: HashMap<&str, usize> = deps
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.len()))
-        .collect();
+    let mut indegree: HashMap<&str, usize> =
+        deps.iter().map(|(k, v)| (k.as_str(), v.len())).collect();
 
     // notify[dep] = jobs that are waiting for `dep` to finish
     let mut notify: HashMap<&str, Vec<&str>> = HashMap::new();

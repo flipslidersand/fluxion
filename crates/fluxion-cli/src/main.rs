@@ -7,7 +7,7 @@ use fluxion_core::{
     store::RunStore,
     workflow::{PermissionSet, Workflow},
 };
-use fluxion_host::{scheduler, FluxionHost};
+use fluxion_host::{FluxionHost, scheduler};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -38,13 +38,9 @@ enum Commands {
         from: String,
     },
     /// Show detailed status of a previous run
-    Status {
-        run_id: String,
-    },
+    Status { run_id: String },
     /// Show job timeline and failure reasons for a previous run
-    Logs {
-        run_id: String,
-    },
+    Logs { run_id: String },
     /// Show interface and capability requirements of a Wasm component
     Inspect {
         /// Path to the .wasm component file
@@ -106,7 +102,9 @@ async fn run(command: Commands) -> Result<()> {
         Commands::Run { path } => {
             let wf = Workflow::from_file(&path)
                 .map_err(|e| anyhow::anyhow!("Failed to load '{}': {}", path, e))?;
-            let workflow_path = PathBuf::from(&path).canonicalize().unwrap_or(PathBuf::from(&path));
+            let workflow_path = PathBuf::from(&path)
+                .canonicalize()
+                .unwrap_or(PathBuf::from(&path));
             let host = Arc::new(FluxionHost::new()?);
             scheduler::run(&wf, &workflow_path, host).await?;
         }
@@ -114,8 +112,9 @@ async fn run(command: Commands) -> Result<()> {
         Commands::Retry { run_id, from } => {
             let store = RunStore::open()?;
             let (workflow_path, _) = store.load_run(&run_id)?;
-            let wf = Workflow::from_file(&workflow_path)
-                .map_err(|e| anyhow::anyhow!("Failed to load workflow '{}': {}", workflow_path, e))?;
+            let wf = Workflow::from_file(&workflow_path).map_err(|e| {
+                anyhow::anyhow!("Failed to load workflow '{}': {}", workflow_path, e)
+            })?;
             let wp = PathBuf::from(&workflow_path);
             let host = Arc::new(FluxionHost::new()?);
             scheduler::retry(&wf, &wp, host, &run_id, &from).await?;
@@ -150,7 +149,7 @@ async fn run(command: Commands) -> Result<()> {
                 if runs.is_empty() {
                     println!("No runs found.");
                 } else {
-                    println!("{:<28}  {:<20}  {}", "RUN ID", "WORKFLOW", "STATUS");
+                    println!("{:<28}  {:<20}  STATUS", "RUN ID", "WORKFLOW");
                     println!("{}", "-".repeat(60));
                     for r in runs {
                         println!("{:<28}  {:<20}  {}", r.id, r.workflow_name, r.status);
@@ -174,7 +173,8 @@ fn cmd_status(run_id: &str) -> Result<()> {
     let run = store.get_run(run_id)?;
     let jobs = store.get_run_jobs(run_id)?;
 
-    let elapsed_s = run.completed_at
+    let elapsed_s = run
+        .completed_at
         .map(|end| (end - run.started_at) as f64)
         .unwrap_or(0.0);
 
@@ -193,9 +193,17 @@ fn cmd_status(run_id: &str) -> Result<()> {
     println!("  {:<pad$}  STATUS   ELAPSED", "JOB", pad = pad);
     println!("  {}", "-".repeat(pad + 20));
     for j in &jobs {
-        let elapsed = j.elapsed_ms.map(|ms| format!("{:.2}s", ms as f64 / 1000.0))
+        let elapsed = j
+            .elapsed_ms
+            .map(|ms| format!("{:.2}s", ms as f64 / 1000.0))
             .unwrap_or_else(|| "-".to_string());
-        println!("  {:<pad$}  {:<8} {}", j.job_id, j.status.to_uppercase(), elapsed, pad = pad);
+        println!(
+            "  {:<pad$}  {:<8} {}",
+            j.job_id,
+            j.status.to_uppercase(),
+            elapsed,
+            pad = pad
+        );
         if let Some(ref reason) = j.reason {
             println!("    Reason: {}", reason);
         }
@@ -242,11 +250,11 @@ fn cmd_logs(run_id: &str) -> Result<()> {
 // ── fluxion inspect ───────────────────────────────────────────────────────────
 
 fn cmd_inspect(path: &str) -> Result<()> {
-    use wasmtime::{Config, Engine};
     use wasmtime::component::Component;
+    use wasmtime::{Config, Engine};
 
-    let meta = std::fs::metadata(path)
-        .map_err(|e| anyhow::anyhow!("Cannot read '{}': {}", path, e))?;
+    let meta =
+        std::fs::metadata(path).map_err(|e| anyhow::anyhow!("Cannot read '{}': {}", path, e))?;
 
     let mut config = Config::new();
     config.wasm_component_model(true);
@@ -258,7 +266,11 @@ fn cmd_inspect(path: &str) -> Result<()> {
     let ct = component.component_type();
 
     println!("Path:  {}", path);
-    println!("Size:  {} bytes ({:.1} KB)", meta.len(), meta.len() as f64 / 1024.0);
+    println!(
+        "Size:  {} bytes ({:.1} KB)",
+        meta.len(),
+        meta.len() as f64 / 1024.0
+    );
 
     let exports: Vec<_> = ct.exports(&engine).collect();
     println!();

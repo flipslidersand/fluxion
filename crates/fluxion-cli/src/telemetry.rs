@@ -1,14 +1,14 @@
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_sdk::trace::TracerProvider;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Initialize tracing. If `otel` is true, attach an OTEL stdout exporter.
 /// Returns the provider so the caller can shut it down cleanly.
 pub fn init(otel: bool) -> Option<TracerProvider> {
     // Default: show fluxion INFO+, silence noisy upstream crates.
     // Override with RUST_LOG env var.
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("fluxion=info,warn"));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("fluxion=info,warn"));
 
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_target(false)
@@ -44,10 +44,10 @@ pub fn init(otel: bool) -> Option<TracerProvider> {
 }
 
 pub fn shutdown(provider: Option<TracerProvider>) {
-    if let Some(p) = provider {
-        if let Err(e) = p.shutdown() {
-            eprintln!("Tracer shutdown error: {e}");
-        }
+    if let Some(p) = provider
+        && let Err(e) = p.shutdown()
+    {
+        eprintln!("Tracer shutdown error: {e}");
     }
     opentelemetry::global::shutdown_tracer_provider();
 }
