@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "fluxion": {
-      "command": "/home/dev-nodee/projects/ACTIVE/fluxion/target/debug/fluxion",
+      "command": "./target/debug/fluxion",
       "args": ["mcp-serve"],
       "description": "Fluxion Wasm job execution engine — run workflows, retry failed jobs, list run history"
     }
