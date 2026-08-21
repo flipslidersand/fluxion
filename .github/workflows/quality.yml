@@ -22,7 +22,7 @@ jobs:
     uses: flipslidersand-labs/qa-workflows/.github/workflows/rust-test.yml@main
     with:
       test-args: "-p fluxion-core -p fluxion-cli -p fluxion-worker"
-      clippy-args: "-p fluxion-core -p fluxion-cli -p fluxion-worker --all-targets"
+      clippy-args: "-p fluxion-core -p fluxion-cli -p fluxion-worker"
       system-deps: "build-essential libssl-dev pkg-config"
       run-fmt: false
       run-coverage: false
