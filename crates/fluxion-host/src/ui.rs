@@ -104,7 +104,10 @@ async fn ui_schedules(State(s): State<ApiState>) -> Result<impl IntoResponse, Ui
         body.push_str("<tr><td colspan=\"5\">No schedules registered.</td></tr>");
     } else {
         for s in &rows {
-            let last = s.last_run_at.map(format_ts).unwrap_or_else(|| "—".to_string());
+            let last = s
+                .last_run_at
+                .map(format_ts)
+                .unwrap_or_else(|| "—".to_string());
             body.push_str(&format!(
                 "<tr>\
                    <td>{id}</td>\
